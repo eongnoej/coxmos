@@ -2,6 +2,8 @@
 
 import type { ApiKeys, AgentId, LocalAgentStatuses } from '@/lib/types'
 import { IconSettings, IconClaude, IconOpenAI, IconConvert } from './Icons'
+import { AGENTS } from '@/lib/data'
+import { IconClaude as IC, IconOpenAI as IO } from './Icons'
 
 // ── Settings Modal ────────────────────────────────────────────────
 interface SettingsProps {
@@ -14,9 +16,15 @@ interface SettingsProps {
   loginOutput: string
   onLogin: (agent: AgentId) => void
   onRefresh: () => void
+  fetchingModels: Record<AgentId, boolean>
+  availableModels: Record<AgentId, string[]>
 }
 
-export function SettingsModal({ draft, onChange, onSave, onClose, statuses, loginAgent, loginOutput, onLogin, onRefresh }: SettingsProps) {
+export function SettingsModal({
+  draft, onChange, onSave, onClose,
+  statuses, loginAgent, loginOutput, onLogin, onRefresh,
+  fetchingModels, availableModels,
+}: SettingsProps) {
   return (
     <div className="overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal settings-modal">
@@ -24,6 +32,56 @@ export function SettingsModal({ draft, onChange, onSave, onClose, statuses, logi
           <IconSettings />
           <span className="modal-title">설정</span>
           <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-label">AI API 키</div>
+          <div className="settings-hint" style={{ marginBottom: 10 }}>
+            API 키를 저장하면 사용 가능한 모델을 자동으로 불러옵니다.
+          </div>
+
+          {(['claude', 'openai'] as AgentId[]).map(id => {
+            const name = id === 'claude' ? 'Claude (Anthropic)' : 'ChatGPT (OpenAI)'
+            const placeholder = id === 'claude' ? 'sk-ant-...' : 'sk-...'
+            const models = availableModels[id] ?? []
+            return (
+              <div key={id} style={{ marginBottom: 14 }}>
+                <div className="settings-row">
+                  <div className="agent-label">
+                    <div className={`agent-icon agent-${id}-icon`}>
+                      {id === 'claude' ? <IconClaude /> : <IconOpenAI />}
+                    </div>
+                    {name}
+                  </div>
+                  <input
+                    type="password"
+                    className="key-input"
+                    placeholder={placeholder}
+                    value={id === 'claude' ? draft.claude : draft.openai}
+                    onChange={e => onChange(id === 'claude' ? { ...draft, claude: e.target.value } : { ...draft, openai: e.target.value })}
+                  />
+                </div>
+                {fetchingModels[id] && (
+                  <div style={{ fontSize: '11.5px', color: 'var(--fg3)', paddingLeft: 4, marginTop: 4 }}>
+                    사용 가능한 모델 확인 중...
+                  </div>
+                )}
+                {!fetchingModels[id] && models.length > 0 && (
+                  <div style={{ fontSize: '11.5px', color: 'var(--green)', paddingLeft: 4, marginTop: 4 }}>
+                    {models.length}개 모델 사용 가능: {models.slice(0, 3).join(', ')}{models.length > 3 ? ` 외 ${models.length - 3}개` : ''}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+
+          <div className="settings-hint">
+            키는 브라우저에만 저장되며 외부로 전송되지 않습니다.<br />
+            Claude:{' '}
+            <a href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a>
+            &nbsp;/&nbsp;ChatGPT:{' '}
+            <a href="https://platform.openai.com" target="_blank" rel="noreferrer">platform.openai.com</a>
+          </div>
         </div>
 
         <div className="settings-section">
@@ -41,7 +99,7 @@ export function SettingsModal({ draft, onChange, onSave, onClose, statuses, logi
                 </div>
                 <button
                   className="modal-btn cancel"
-                  disabled={loginAgent !== null || status?.loggedIn}
+                  disabled={loginAgent !== null || !!status?.loggedIn}
                   onClick={() => onLogin(id)}
                 >
                   {loginAgent === id ? '로그인 중...' : status?.loggedIn ? '연결됨' : '계정 로그인'}
@@ -56,53 +114,9 @@ export function SettingsModal({ draft, onChange, onSave, onClose, statuses, logi
           </div>
         </div>
 
-        <div className="settings-section">
-          <div className="settings-label">API 키 (계정 연결 불가 시 fallback)</div>
-
-          <div className="settings-row">
-            <div className="agent-label">
-              <div className="agent-icon agent-claude-icon"><IconClaude /></div>
-              Claude
-            </div>
-            <input
-              type="password"
-              className="key-input"
-              placeholder="sk-ant-..."
-              value={draft.claude}
-              onChange={e => onChange({ ...draft, claude: e.target.value })}
-            />
-          </div>
-
-          <div className="settings-row">
-            <div className="agent-label">
-              <div className="agent-icon agent-openai-icon"><IconOpenAI /></div>
-              ChatGPT
-            </div>
-            <input
-              type="password"
-              className="key-input"
-              placeholder="sk-..."
-              value={draft.openai}
-              onChange={e => onChange({ ...draft, openai: e.target.value })}
-            />
-          </div>
-
-          <div className="settings-hint">
-            키는 브라우저에만 저장되며 외부로 전송되지 않습니다.<br />
-            Claude:{' '}
-            <a href="https://console.anthropic.com" target="_blank" rel="noreferrer">
-              console.anthropic.com
-            </a>
-            &nbsp;/&nbsp;ChatGPT:{' '}
-            <a href="https://platform.openai.com" target="_blank" rel="noreferrer">
-              platform.openai.com
-            </a>
-          </div>
-        </div>
-
         <div className="modal-foot">
           <button className="modal-btn cancel" onClick={onClose}>취소</button>
-          <button className="modal-btn primary" onClick={onSave}>저장</button>
+          <button className="modal-btn primary" onClick={onSave}>저장 및 모델 불러오기</button>
         </div>
       </div>
     </div>
@@ -161,9 +175,6 @@ export function ConvertModal({ state, markdown, noteTitle, onClose, onSave }: Co
 }
 
 // ── Agent Dropdown ────────────────────────────────────────────────
-import { AGENTS } from '@/lib/data'
-import { IconClaude as IC, IconOpenAI as IO } from './Icons'
-
 interface AgentDropProps {
   current: AgentId
   onSelect: (id: AgentId) => void
@@ -183,7 +194,7 @@ export function AgentDropdown({ current, onSelect }: AgentDropProps) {
             <div className={`agent-icon agent-${ag.id}-icon`}><Ico /></div>
             <div className="agent-option-info">
               <div className="agent-option-name">{ag.name}</div>
-              <div className="agent-option-sub">{ag.company} · {ag.model}</div>
+              <div className="agent-option-sub">{ag.company}</div>
             </div>
             {current === ag.id && <span className="agent-option-check">✓</span>}
           </div>

@@ -1,14 +1,14 @@
 import type { Note, ApiKeys, AgentId, ConvertedFile, ChatSession, Theme } from './types'
 
 const KEYS = {
-  notes:     'coxmos-notes',
-  keys:      'coxmos-apikeys',
-  agent:     'coxmos-agent',
-  converted: 'coxmos-converted',
-  chats:     'coxmos-chats',
-  theme:     'coxmos-theme',
-  models:    'coxmos-models',
-  customModels: 'coxmos-custom-models',
+  notes:           'coxmos-notes',
+  keys:            'coxmos-apikeys',
+  agent:           'coxmos-agent',
+  converted:       'coxmos-converted',
+  chats:           'coxmos-chats',
+  theme:           'coxmos-theme',
+  selectedModel:   'coxmos-selected-model',
+  availableModels: 'coxmos-available-models',
 }
 
 function safe<T>(fn: () => T, fallback: T): T {
@@ -46,17 +46,17 @@ export const storage = {
   saveTheme: (theme: Theme) =>
     localStorage.setItem(KEYS.theme, theme),
 
-  getModels: (): Record<AgentId, string> =>
-    safe(() => JSON.parse(localStorage.getItem(KEYS.models) || '{"claude":"","openai":""}'), { claude: '', openai: '' }),
+  getSelectedModel: (): Record<AgentId, string> =>
+    safe(() => JSON.parse(localStorage.getItem(KEYS.selectedModel) || '{"claude":"","openai":""}'), { claude: '', openai: '' }),
 
-  saveModels: (models: Record<AgentId, string>) =>
-    localStorage.setItem(KEYS.models, JSON.stringify(models)),
+  saveSelectedModel: (models: Record<AgentId, string>) =>
+    localStorage.setItem(KEYS.selectedModel, JSON.stringify(models)),
 
-  getCustomModels: (): Record<AgentId, string> =>
-    safe(() => JSON.parse(localStorage.getItem(KEYS.customModels) || '{"claude":"","openai":""}'), { claude: '', openai: '' }),
+  getAvailableModels: (): Record<AgentId, string[]> =>
+    safe(() => JSON.parse(localStorage.getItem(KEYS.availableModels) || '{"claude":[],"openai":[]}'), { claude: [], openai: [] }),
 
-  saveCustomModels: (models: Record<AgentId, string>) =>
-    localStorage.setItem(KEYS.customModels, JSON.stringify(models)),
+  saveAvailableModels: (models: Record<AgentId, string[]>) =>
+    localStorage.setItem(KEYS.availableModels, JSON.stringify(models)),
 
   getConvertedFiles: (): ConvertedFile[] =>
     safe(() => JSON.parse(localStorage.getItem(KEYS.converted) || '[]'), []),

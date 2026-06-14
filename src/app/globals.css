@@ -593,3 +593,38 @@ body {
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.22); }
 ::selection { background: var(--accent-dim); }
+
+/* ── User Row (sidebar footer) ── */
+.user-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; margin-top: 6px;
+  border-top: 1px solid var(--border);
+  cursor: pointer; border-radius: 4px; transition: background .12s;
+}
+.user-row:hover { background: var(--hover); }
+.user-avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.user-avatar-fallback {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.user-name { font-size: 12px; color: var(--fg2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-logout-hint { font-size: 10.5px; color: var(--fg3); opacity: 0; transition: opacity .12s; }
+.user-row:hover .user-logout-hint { opacity: 1; }
+
+/* ── Editor Empty State ── */
+.editor-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  flex: 1; gap: 8px; padding: 40px 24px; text-align: center;
+}
+.editor-empty-icon { color: var(--fg3); opacity: .4; }
+.editor-empty-icon svg { width: 36px; height: 36px; }
+.editor-empty-title { font-size: 15px; font-weight: 600; color: var(--fg2); margin-top: 8px; }
+.editor-empty-hint { font-size: 12.5px; color: var(--fg3); line-height: 1.6; }
+
+/* ── Tab Empty ── */
+.tab-empty {
+  display: flex; align-items: center; padding: 0 14px;
+  font-size: 12px; color: var(--fg3); height: 100%;
+}

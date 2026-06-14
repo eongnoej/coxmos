@@ -5,9 +5,14 @@ import type { Block, BlockType } from '@/lib/types'
 
 export function blockPlaceholder(type: BlockType): string {
   const m: Record<BlockType, string> = {
-    h1: '큰 제목', h2: '중간 제목', h3: '소제목',
-    p: "AI 기능은 '스페이스 키', 명령어는 '/'를 입력하세요.",
-    todo: '할 일', quote: '인용문', code: '코드', divider: '',
+    h1: '큰 제목',
+    h2: '중간 제목',
+    h3: '소제목',
+    p: "내용을 입력하거나 '/'로 블록 유형 변경",
+    todo: '할 일',
+    quote: '인용문',
+    code: '코드',
+    divider: '',
   }
   return m[type]
 }

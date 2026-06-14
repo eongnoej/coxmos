@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSession, signOut } from 'next-auth/react'
 import { storage, noteToMarkdown, downloadMd } from '@/lib/storage'
 import type { Note, Block, BlockType, AgentId, ChatMessage, ChatSession, ApiKeys, ConvertedFile, LocalAgentStatuses, Theme } from '@/lib/types'
-import { AGENTS, SLASH_ITEMS, DEMO_TASKS, DEMO_BLOCKS } from '@/lib/data'
+import { AGENTS, SLASH_ITEMS } from '@/lib/data'
 import {
   IconExplorer, IconSearch, IconSettings, IconPlus,
   IconFile, IconConvert, IconDownload, IconDoc,
@@ -14,21 +15,63 @@ import { SettingsModal, ConvertModal, AgentDropdown } from '@/components/Modals'
 
 function uid() { return Math.random().toString(36).slice(2, 10) }
 
-const MODEL_OPTIONS: Record<AgentId, { value: string; label: string }[]> = {
-  claude: [
-    { value: '', label: '자동' },
-    { value: 'sonnet', label: 'Sonnet' },
-    { value: 'opus', label: 'Opus' },
-    { value: 'haiku', label: 'Haiku' },
-    { value: 'custom', label: '직접 입력' },
-  ],
-  openai: [
-    { value: '', label: '자동' },
-    { value: 'custom', label: '직접 입력' },
-  ],
+function getCursorInfo(el: HTMLElement) {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return { atStart: false, atEnd: false }
+  const range = sel.getRangeAt(0)
+  if (!range.collapsed) return { atStart: false, atEnd: false }
+
+  const preRange = range.cloneRange()
+  preRange.selectNodeContents(el)
+  preRange.setEnd(range.startContainer, range.startOffset)
+  const before = preRange.toString().length
+
+  const postRange = range.cloneRange()
+  postRange.selectNodeContents(el)
+  postRange.setStart(range.endContainer, range.endOffset)
+  const after = postRange.toString().length
+
+  return { atStart: before === 0, atEnd: after === 0 }
+}
+
+function focusBlockEnd(blockId: string) {
+  const el = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"] .block-content`)
+  if (!el) return
+  el.focus()
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  range.collapse(false)
+  const sel = window.getSelection()
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+}
+
+function focusBlockStart(blockId: string) {
+  const el = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"] .block-content`)
+  if (!el) return
+  el.focus()
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  range.collapse(true)
+  const sel = window.getSelection()
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+}
+
+const MARKDOWN_TRIGGERS: Record<string, BlockType> = {
+  '#': 'h1',
+  '##': 'h2',
+  '###': 'h3',
+  '>': 'quote',
+  '-': 'p',
+  '*': 'p',
+  '[]': 'todo',
+  '[ ]': 'todo',
+  '```': 'code',
 }
 
 export default function App() {
+  const { data: session } = useSession()
   const [notes, setNotes] = useState<Note[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [agent, setAgent] = useState<AgentId>('claude')
@@ -45,10 +88,10 @@ export default function App() {
   const [loginAgent, setLoginAgent] = useState<AgentId | null>(null)
   const [loginOutput, setLoginOutput] = useState('')
   const [theme, setTheme] = useState<Theme>('dark')
-  const [models, setModels] = useState<Record<AgentId, string>>({ claude: '', openai: '' })
-  const [customModels, setCustomModels] = useState<Record<AgentId, string>>({ claude: '', openai: '' })
-  const [localFolder, setLocalFolder] = useState<{ name: string; entries: { name: string; kind: string }[] } | null>(null)
-  const [activeTab, setActiveTab] = useState<'chat' | 'tasks' | 'files'>('chat')
+  const [selectedModel, setSelectedModel] = useState<Record<AgentId, string>>({ claude: '', openai: '' })
+  const [availableModels, setAvailableModels] = useState<Record<AgentId, string[]>>({ claude: [], openai: [] })
+  const [fetchingModels, setFetchingModels] = useState<Record<AgentId, boolean>>({ claude: false, openai: false })
+  const [activeTab, setActiveTab] = useState<'chat' | 'files'>('chat')
   const [slashMenu, setSlashMenu] = useState({ open: false, x: 0, y: 0, blockId: '' })
   const [showConvert, setShowConvert] = useState(false)
   const [convertState, setConvertState] = useState<'loading' | 'done' | null>(null)
@@ -56,29 +99,25 @@ export default function App() {
   const [convertedFiles, setConvertedFiles] = useState<ConvertedFile[]>([])
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [toast, setToast] = useState<{ msg: string; color: string } | null>(null)
-  const [expandedTask, setExpandedTask] = useState<string | null>(null)
   const chatBodyRef = useRef<HTMLDivElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout>>()
+  const activeNoteRef = useRef<Note | null>(null)
 
   useEffect(() => {
     const saved = storage.getNotes()
     if (saved.length) {
       setNotes(saved)
       setActiveId(saved[0].id)
-    } else {
-      const note: Note = { id: uid(), title: '팀 회의 메모', blocks: DEMO_BLOCKS, createdAt: Date.now(), updatedAt: Date.now() }
-      setNotes([note])
-      setActiveId(note.id)
     }
-    setApiKeys(storage.getApiKeys())
+    const savedKeys = storage.getApiKeys()
+    setApiKeys(savedKeys)
     setAgent(storage.getAgent())
     setConvertedFiles(storage.getConvertedFiles())
     const savedTheme = storage.getTheme()
     setTheme(savedTheme)
     document.documentElement.dataset.theme = savedTheme
-    const savedModels = storage.getModels()
-    setModels(savedModels)
-    setCustomModels(storage.getCustomModels())
+    setSelectedModel(storage.getSelectedModel())
+    setAvailableModels(storage.getAvailableModels())
     const savedChats = storage.getChats()
     if (savedChats.length) {
       setChats(savedChats)
@@ -86,7 +125,7 @@ export default function App() {
       setAgent(savedChats[0].agent)
     } else {
       const chat: ChatSession = {
-        id: uid(), title: '새 대화', agent: 'claude', model: savedModels.claude,
+        id: uid(), title: '새 대화', agent: 'claude', model: '',
         messages: [], createdAt: Date.now(), updatedAt: Date.now(),
       }
       setChats([chat])
@@ -116,11 +155,41 @@ export default function App() {
   }, [])
 
   const activeNote = notes.find(n => n.id === activeId) ?? null
+  activeNoteRef.current = activeNote
   const activeChat = chats.find(chat => chat.id === activeChatId) ?? null
   const messages = activeChat?.messages ?? []
   const accountConnected = Boolean(localStatuses?.[agent]?.loggedIn)
   const agentAvailable = accountConnected || Boolean(apiKeys[agent])
-  const selectedModel = models[agent] === 'custom' ? customModels[agent].trim() : models[agent]
+  const currentModel = selectedModel[agent]
+  const modelList = availableModels[agent] ?? []
+
+  async function fetchModelsForAgent(agentId: AgentId, key: string) {
+    if (!key) return
+    setFetchingModels(prev => ({ ...prev, [agentId]: true }))
+    try {
+      const res = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: agentId, apiKey: key }),
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.models?.length) {
+        const next = { ...availableModels, [agentId]: data.models }
+        setAvailableModels(next)
+        storage.saveAvailableModels(next)
+        // Auto-select best model
+        const bestModel = data.models[0]
+        if (!selectedModel[agentId]) {
+          const nextSel = { ...selectedModel, [agentId]: bestModel }
+          setSelectedModel(nextSel)
+          storage.saveSelectedModel(nextSel)
+        }
+      }
+    } catch { /* ignore */ } finally {
+      setFetchingModels(prev => ({ ...prev, [agentId]: false }))
+    }
+  }
 
   function updateMessages(updater: ChatMessage[] | ((current: ChatMessage[]) => ChatMessage[])) {
     setChats(current => current.map(chat => {
@@ -138,7 +207,7 @@ export default function App() {
 
   function newChat() {
     const chat: ChatSession = {
-      id: uid(), title: '새 대화', agent, model: selectedModel,
+      id: uid(), title: '새 대화', agent, model: currentModel,
       messages: [], createdAt: Date.now(), updatedAt: Date.now(),
     }
     setChats(current => [chat, ...current])
@@ -149,15 +218,16 @@ export default function App() {
   function openChat(chat: ChatSession) {
     setActiveChatId(chat.id)
     setAgent(chat.agent)
-    setModels(current => ({ ...current, [chat.agent]: chat.model }))
     setShowChatHistory(false)
   }
 
   function changeModel(value: string) {
-    const next = { ...models, [agent]: value }
-    setModels(next)
-    storage.saveModels(next)
-    setChats(current => current.map(chat => chat.id === activeChatId ? { ...chat, model: value, updatedAt: Date.now() } : chat))
+    const next = { ...selectedModel, [agent]: value }
+    setSelectedModel(next)
+    storage.saveSelectedModel(next)
+    setChats(current => current.map(chat =>
+      chat.id === activeChatId ? { ...chat, model: value, updatedAt: Date.now() } : chat
+    ))
   }
 
   function toggleTheme() {
@@ -165,32 +235,6 @@ export default function App() {
     setTheme(next)
     storage.saveTheme(next)
     document.documentElement.dataset.theme = next
-  }
-
-  async function openLocalFolder() {
-    const picker = (window as typeof window & {
-      showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle & {
-        entries: () => AsyncIterableIterator<[string, FileSystemHandle]>
-      }>
-    }).showDirectoryPicker
-    if (!picker) {
-      showToast('이 브라우저는 로컬 폴더 열기를 지원하지 않습니다.', 'var(--yellow)')
-      return
-    }
-    try {
-      const directory = await picker()
-      const entries: { name: string; kind: string }[] = []
-      for await (const [name, handle] of directory.entries()) {
-        entries.push({ name, kind: handle.kind })
-        if (entries.length >= 100) break
-      }
-      entries.sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'directory' ? -1 : 1)
-      setLocalFolder({ name: directory.name, entries })
-      setActiveTab('files')
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      showToast('폴더를 열지 못했습니다.', 'var(--red)')
-    }
   }
 
   async function refreshLocalStatuses() {
@@ -252,8 +296,12 @@ export default function App() {
   }
 
   function updateBlock(blockId: string, content: string) {
-    if (!activeNote) return
-    updateNote({ blocks: activeNote.blocks.map(b => b.id === blockId ? { ...b, content } : b) })
+    const note = activeNoteRef.current
+    if (!note) return
+    setNotes(ns => ns.map(n => n.id === note.id
+      ? { ...n, blocks: n.blocks.map(b => b.id === blockId ? { ...b, content } : b), updatedAt: Date.now() }
+      : n
+    ))
   }
 
   function toggleTodo(blockId: string) {
@@ -262,81 +310,153 @@ export default function App() {
   }
 
   function addBlockAfter(afterId: string | null, type: BlockType = 'p') {
-    if (!activeNote) return
+    const note = activeNoteRef.current
+    if (!note) return
     const nb: Block = { id: uid(), type, content: '' }
-    const blocks = [...activeNote.blocks]
+    const blocks = [...note.blocks]
     const idx = afterId ? blocks.findIndex(b => b.id === afterId) : blocks.length - 1
     blocks.splice(idx + 1, 0, nb)
-    updateNote({ blocks })
-    setTimeout(() => {
-      const el = document.querySelector<HTMLElement>(`[data-block-id="${nb.id}"] .block-content`)
-      el?.focus()
-    }, 30)
+    setNotes(ns => ns.map(n => n.id === note.id ? { ...n, blocks, updatedAt: Date.now() } : n))
+    setTimeout(() => focusBlockStart(nb.id), 30)
   }
 
   function deleteBlock(blockId: string) {
-    if (!activeNote || activeNote.blocks.length <= 1) return
-    const idx = activeNote.blocks.findIndex(b => b.id === blockId)
-    const blocks = activeNote.blocks.filter(b => b.id !== blockId)
-    updateNote({ blocks })
-    setTimeout(() => {
-      const prevId = activeNote.blocks[Math.max(0, idx - 1)]?.id
-      if (prevId) document.querySelector<HTMLElement>(`[data-block-id="${prevId}"] .block-content`)?.focus()
-    }, 10)
+    const note = activeNoteRef.current
+    if (!note || note.blocks.length <= 1) return
+    const idx = note.blocks.findIndex(b => b.id === blockId)
+    const prevId = note.blocks[Math.max(0, idx - 1)]?.id
+    setNotes(ns => ns.map(n => n.id === note.id
+      ? { ...n, blocks: n.blocks.filter(b => b.id !== blockId), updatedAt: Date.now() }
+      : n
+    ))
+    setTimeout(() => { if (prevId) focusBlockEnd(prevId) }, 10)
   }
 
-  function changeBlockType(blockId: string, type: BlockType) {
-    if (!activeNote) return
-    updateNote({ blocks: activeNote.blocks.map(b => b.id === blockId ? { ...b, type } : b) })
+  function changeBlockType(blockId: string, type: BlockType, clearContent = false) {
+    const note = activeNoteRef.current
+    if (!note) return
+    setNotes(ns => ns.map(n => n.id === note.id
+      ? { ...n, blocks: n.blocks.map(b => b.id === blockId ? { ...b, type, ...(clearContent ? { content: '' } : {}) } : b), updatedAt: Date.now() }
+      : n
+    ))
     setSlashMenu(s => ({ ...s, open: false }))
-    setTimeout(() => document.querySelector<HTMLElement>(`[data-block-id="${blockId}"] .block-content`)?.focus(), 30)
+    setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"] .block-content`)
+      if (el) { if (clearContent) el.textContent = ''; el.focus() }
+    }, 30)
   }
 
   function handleBlockKeyDown(e: React.KeyboardEvent<HTMLElement>, block: Block) {
+    const el = e.currentTarget as HTMLElement
+    const text = el.textContent || ''
+    const { atStart, atEnd } = getCursorInfo(el)
+    const isMac = navigator.platform.startsWith('Mac')
+    const mod = isMac ? e.metaKey : e.ctrlKey
+
+    // Cmd/Ctrl+Enter → toggle todo
+    if (mod && e.key === 'Enter' && block.type === 'todo') {
+      e.preventDefault()
+      toggleTodo(block.id)
+      return
+    }
+
+    // Enter → new block
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       addBlockAfter(block.id)
+      return
     }
-    if (e.key === 'Backspace') {
-      const t = e.currentTarget as HTMLElement
-      if (!t.textContent?.trim()) { e.preventDefault(); deleteBlock(block.id) }
-    }
-    if (e.key === '/') {
-      const target = e.currentTarget as HTMLElement
-      if (target.textContent?.trim()) return
+
+    // Backspace on empty block → delete
+    if (e.key === 'Backspace' && !text.trim()) {
       e.preventDefault()
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-      const menuWidth = 210
-      const menuHeight = 320
+      deleteBlock(block.id)
+      return
+    }
+
+    // Markdown triggers on Space
+    if (e.key === ' ') {
+      const trimmed = text.trimEnd()
+      const triggerType = MARKDOWN_TRIGGERS[trimmed]
+      if (triggerType) {
+        e.preventDefault()
+        if (triggerType === 'p' && block.type === 'p') return // no-op for '-' in text block
+        changeBlockType(block.id, triggerType, true)
+        return
+      }
+      // '---' → divider
+      if (trimmed === '--') {
+        e.preventDefault()
+        changeBlockType(block.id, 'divider', true)
+        setTimeout(() => addBlockAfter(block.id), 50)
+        return
+      }
+    }
+
+    // Arrow Up → previous block
+    if (e.key === 'ArrowUp' && atStart) {
+      const note = activeNoteRef.current
+      if (!note) return
+      const idx = note.blocks.findIndex(b => b.id === block.id)
+      if (idx > 0) {
+        e.preventDefault()
+        focusBlockEnd(note.blocks[idx - 1].id)
+      }
+      return
+    }
+
+    // Arrow Down → next block
+    if (e.key === 'ArrowDown' && atEnd) {
+      const note = activeNoteRef.current
+      if (!note) return
+      const idx = note.blocks.findIndex(b => b.id === block.id)
+      if (idx < note.blocks.length - 1) {
+        e.preventDefault()
+        focusBlockStart(note.blocks[idx + 1].id)
+      }
+      return
+    }
+
+    // Slash menu
+    if (e.key === '/') {
+      if (text.trim()) return
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
       setSlashMenu({
         open: true,
-        x: Math.min(rect.left, window.innerWidth - menuWidth - 8),
-        y: Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8),
+        x: Math.min(rect.left, window.innerWidth - 218),
+        y: Math.min(rect.bottom + 4, window.innerHeight - 328),
         blockId: block.id,
       })
-    } else if (e.key !== 'Escape') {
-      if (slashMenu.open) setSlashMenu(s => ({ ...s, open: false }))
+      return
     }
-    if (e.key === 'Escape') setSlashMenu(s => ({ ...s, open: false }))
+
+    if (e.key === 'Escape') { setSlashMenu(s => ({ ...s, open: false })); return }
+    if (slashMenu.open && e.key !== 'Escape') setSlashMenu(s => ({ ...s, open: false }))
   }
 
   async function sendChat() {
     const text = chatInput.trim()
     if (!text || isStreaming) return
     const key = apiKeys[agent]
-    if (!accountConnected && !key) { showToast('계정 로그인 또는 API 키 설정이 필요합니다.', 'var(--yellow)'); setShowSettings(true); return }
+    if (!accountConnected && !key) {
+      showToast('계정 로그인 또는 API 키 설정이 필요합니다.', 'var(--yellow)')
+      setShowSettings(true)
+      return
+    }
     const userMsg: ChatMessage = { role: 'user', content: text }
     const newMsgs = [...messages, userMsg]
     updateMessages([...newMsgs, { role: 'assistant', content: '' }])
     setChatInput('')
     setIsStreaming(true)
     try {
-      const noteCtx = activeNote ? `현재 노트 (${activeNote.title}):\n\n${noteToMarkdown(activeNote)}\n\n---\n\n` : ''
+      const note = activeNoteRef.current
+      const noteCtx = note ? `현재 노트 (${note.title}):\n\n${noteToMarkdown(note)}\n\n---\n\n` : ''
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          agent, apiKey: key, model: selectedModel || undefined,
+          agent, apiKey: key, model: currentModel || undefined,
           connection: accountConnected ? 'account' : 'api',
           systemPrompt: '당신은 코스모스(Coxmos)의 AI 어시스턴트입니다. 사용자의 노트를 바탕으로 도와드리세요. 한국어로 답변하세요.',
           messages: [...(noteCtx ? [{ role: 'user', content: noteCtx }] : []), ...newMsgs],
@@ -350,18 +470,30 @@ export default function App() {
         const { done, value } = await reader.read()
         if (done) break
         full += dec.decode(value, { stream: true })
-        updateMessages(prev => { const n = [...prev]; n[n.length - 1] = { role: 'assistant', content: full }; return n })
+        updateMessages(prev => {
+          const n = [...prev]
+          n[n.length - 1] = { role: 'assistant', content: full }
+          return n
+        })
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : '오류가 발생했습니다.'
-      updateMessages(prev => { const n = [...prev]; n[n.length - 1] = { role: 'assistant', content: `오류: ${msg}` }; return n })
+      updateMessages(prev => {
+        const n = [...prev]
+        n[n.length - 1] = { role: 'assistant', content: `오류: ${msg}` }
+        return n
+      })
     } finally { setIsStreaming(false) }
   }
 
   async function startConvert() {
     if (!activeNote) return
-    const claudeAccountConnected = Boolean(localStatuses?.claude.loggedIn)
-    if (!claudeAccountConnected && !apiKeys.claude) { showToast('Claude 계정 로그인 또는 API 키 설정이 필요합니다.', 'var(--yellow)'); setShowSettings(true); return }
+    const claudeConnected = Boolean(localStatuses?.claude.loggedIn)
+    if (!claudeConnected && !apiKeys.claude) {
+      showToast('Claude 계정 로그인 또는 API 키 설정이 필요합니다.', 'var(--yellow)')
+      setShowSettings(true)
+      return
+    }
     setShowConvert(true); setConvertState('loading'); setConvertMd('')
     try {
       const res = await fetch('/api/convert', {
@@ -371,7 +503,7 @@ export default function App() {
           title: activeNote.title,
           content: noteToMarkdown(activeNote),
           apiKey: apiKeys.claude,
-          connection: claudeAccountConnected ? 'account' : 'api',
+          connection: claudeConnected ? 'account' : 'api',
         }),
       })
       const data = await res.json()
@@ -394,19 +526,36 @@ export default function App() {
     setActiveTab('files')
   }
 
-  function openSettings() { setDraftKeys({ ...apiKeys }); setShowSettings(true); refreshLocalStatuses() }
-  function saveSettings() { setApiKeys(draftKeys); storage.saveApiKeys(draftKeys); setShowSettings(false); showToast('설정이 저장되었습니다.') }
+  async function openSettings() {
+    setDraftKeys({ ...apiKeys })
+    setShowSettings(true)
+    refreshLocalStatuses()
+  }
+
+  async function saveSettings() {
+    setApiKeys(draftKeys)
+    storage.saveApiKeys(draftKeys)
+    setShowSettings(false)
+    showToast('저장되었습니다. 사용 가능한 모델을 불러오는 중...')
+    // Fetch models for both agents after saving keys
+    if (draftKeys.claude) fetchModelsForAgent('claude', draftKeys.claude)
+    if (draftKeys.openai) fetchModelsForAgent('openai', draftKeys.openai)
+  }
 
   function selectAgent(id: AgentId) {
     setAgent(id)
     storage.saveAgent(id)
     setShowAgentDrop(false)
-    setChats(current => current.map(chat => chat.id === activeChatId ? { ...chat, agent: id, model: models[id], updatedAt: Date.now() } : chat))
+    setChats(current => current.map(chat =>
+      chat.id === activeChatId ? { ...chat, agent: id, model: selectedModel[id], updatedAt: Date.now() } : chat
+    ))
   }
 
-  const filtered = notes.filter(n => n.title.includes(sidebarSearch))
+  const filtered = notes.filter(n => n.title.toLowerCase().includes(sidebarSearch.toLowerCase()))
   const today = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
   const AgentIco = agent === 'claude' ? IconClaude : IconOpenAI
+  const userName = session?.user?.name ?? '나'
+  const userImage = session?.user?.image
 
   return (
     <>
@@ -437,7 +586,9 @@ export default function App() {
             <div className="tree">
               <div className="tree-section-label">COXMOS</div>
               {filtered.length === 0 && (
-                <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--fg3)' }}>노트가 없습니다</div>
+                <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--fg3)' }}>
+                  {notes.length === 0 ? '새 노트를 만들어보세요' : '검색 결과 없음'}
+                </div>
               )}
               {filtered.map(note => (
                 <div key={note.id} className={`tree-item i1 ${note.id === activeId ? 'active' : ''}`} onClick={() => setActiveId(note.id)}>
@@ -464,25 +615,39 @@ export default function App() {
             </div>
             <div className="sidebar-footer">
               <button className="new-note-btn" onClick={newNote}><IconPlus /> 새 노트</button>
+              {session?.user && (
+                <div className="user-row" onClick={() => signOut({ callbackUrl: '/login' })} title="로그아웃">
+                  {userImage
+                    ? <img src={userImage} alt={userName} className="user-avatar" />
+                    : <div className="user-avatar-fallback">{userName[0]}</div>
+                  }
+                  <span className="user-name">{userName}</span>
+                  <span className="user-logout-hint">로그아웃</span>
+                </div>
+              )}
             </div>
           </aside>
 
           {/* Editor */}
           <div className="editor-group">
             <div className="editor-tabs">
-              {activeNote && (
+              {activeNote ? (
                 <div className="tab active">
                   <IconFile />
                   <span>{activeNote.title || '제목 없음'}</span>
-                  <button className="tab-close" onClick={newNote}>×</button>
+                  <button className="tab-close" onClick={() => setActiveId(null)}>×</button>
                 </div>
+              ) : (
+                <div className="tab-empty">노트를 선택하거나 새로 만드세요</div>
               )}
             </div>
-            <div className="breadcrumb">
-              <span>coxmos</span>
-              <span className="sep">›</span>
-              <span style={{ color: 'var(--fg2)' }}>{activeNote?.title || '제목 없음'}</span>
-            </div>
+            {activeNote && (
+              <div className="breadcrumb">
+                <span>coxmos</span>
+                <span className="sep">›</span>
+                <span style={{ color: 'var(--fg2)' }}>{activeNote.title || '제목 없음'}</span>
+              </div>
+            )}
 
             {activeNote ? (
               <div className="editor-body">
@@ -510,7 +675,13 @@ export default function App() {
 
                   <div className="page-meta">
                     <div className="page-meta-item"><IconCalendar /><span>{today}</span></div>
-                    <div className="page-meta-item"><IconUser /><span>나</span></div>
+                    <div className="page-meta-item">
+                      {userImage
+                        ? <img src={userImage} alt={userName} style={{ width: 14, height: 14, borderRadius: '50%' }} />
+                        : <IconUser />
+                      }
+                      <span>{userName}</span>
+                    </div>
                   </div>
 
                   <div className="blocks">
@@ -527,8 +698,17 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: 'var(--fg3)', fontSize: '14px' }}>
-                왼쪽에서 노트를 선택하거나 새로 만드세요
+              <div className="editor-empty">
+                <div className="editor-empty-icon">
+                  <IconFile />
+                </div>
+                <div className="editor-empty-title">노트를 선택하거나 새로 만드세요</div>
+                <div className="editor-empty-hint">
+                  왼쪽 사이드바에서 노트를 선택하거나<br />아래 버튼으로 새 노트를 만들어보세요
+                </div>
+                <button className="page-action-btn primary" onClick={newNote} style={{ marginTop: 16 }}>
+                  <IconPlus /> 새 노트 만들기
+                </button>
               </div>
             )}
           </div>
@@ -536,9 +716,9 @@ export default function App() {
           {/* Right Panel */}
           <aside className="right-panel">
             <div className="panel-tabs">
-              {(['chat', 'tasks', 'files'] as const).map(t => (
+              {(['chat', 'files'] as const).map(t => (
                 <div key={t} className={`p-tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)}>
-                  {t === 'chat' ? 'CHAT' : t === 'tasks' ? 'TASKS' : 'FILES'}
+                  {t === 'chat' ? 'CHAT' : 'FILES'}
                 </div>
               ))}
             </div>
@@ -551,35 +731,32 @@ export default function App() {
                     <button className="agent-selector-btn" onClick={e => { e.stopPropagation(); setShowAgentDrop(d => !d) }}>
                       <div className={`agent-icon agent-${agent}-icon`}><AgentIco /></div>
                       <span className="agent-name">{AGENTS[agent].name}</span>
-                      <span className="agent-model">{selectedModel || '자동'}</span>
+                      <span className="agent-model">{currentModel || '모델 선택'}</span>
                       <span className="agent-chevron">▾</span>
                     </button>
                     {showAgentDrop && <AgentDropdown current={agent} onSelect={selectAgent} />}
                   </div>
-                  <select className="model-select" aria-label="모델 선택" value={models[agent]} onChange={e => changeModel(e.target.value)}>
-                    {MODEL_OPTIONS[agent].map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <select
+                      className="model-select"
+                      aria-label="모델 선택"
+                      value={currentModel}
+                      onChange={e => changeModel(e.target.value)}
+                      disabled={fetchingModels[agent]}
+                    >
+                      {fetchingModels[agent]
+                        ? <option>불러오는 중...</option>
+                        : modelList.length === 0
+                          ? <option value="">모델 미설정 (API 키 입력 필요)</option>
+                          : modelList.map(m => <option key={m} value={m}>{m}</option>)
+                      }
+                    </select>
+                  </div>
                   <div className="chat-tools">
                     <button className="chat-tool-btn" onClick={() => setShowChatHistory(value => !value)}>목록</button>
                     <button className="chat-tool-btn" onClick={newChat}>새 대화</button>
                   </div>
                 </div>
-
-                {models[agent] === 'custom' && (
-                  <div style={{ padding: '0 10px 7px' }}>
-                    <input
-                      className="model-custom"
-                      aria-label="사용자 지정 모델 ID"
-                      placeholder="모델 ID"
-                      value={customModels[agent]}
-                      onChange={e => {
-                        const next = { ...customModels, [agent]: e.target.value }
-                        setCustomModels(next)
-                        storage.saveCustomModels(next)
-                      }}
-                    />
-                  </div>
-                )}
 
                 {showChatHistory ? (
                   <div className="chat-history">
@@ -601,7 +778,7 @@ export default function App() {
                     {activeNote && (
                       <div className="chat-ctx">
                         <IconDoc />
-                        {activeNote.title} — 컨텍스트 연결됨
+                        {activeNote.title || '제목 없음'} — 컨텍스트 연결됨
                       </div>
                     )}
                     <div className="chat-body" ref={chatBodyRef}>
@@ -609,7 +786,7 @@ export default function App() {
                         <div className="chat-msg ai">
                           <div className="chat-bubble">
                             안녕하세요! <strong>{AGENTS[agent].name}</strong>입니다.
-                            {activeNote ? ` "${activeNote.title}"를 읽고 있어요.` : ''}
+                            {activeNote ? ` "${activeNote.title || '이 노트'}"를 읽고 있어요.` : ''}
                             {' '}무엇을 도와드릴까요?
                           </div>
                         </div>
@@ -626,11 +803,15 @@ export default function App() {
                       ))}
                     </div>
                     <div className="chat-footer">
-                      {!agentAvailable && <button className="chat-tool-btn" onClick={openSettings}>계정 연결 또는 API 키 설정</button>}
+                      {!agentAvailable && (
+                        <button className="chat-tool-btn" onClick={openSettings}>
+                          계정 연결 또는 API 키 설정
+                        </button>
+                      )}
                       <div className="chat-input-row">
                         <textarea
                           className="chat-textarea"
-                          placeholder={agentAvailable ? '메시지 입력... (Shift+Enter 줄바꿈)' : '계정 로그인 또는 API 키 설정이 필요합니다'}
+                          placeholder={agentAvailable ? '메시지 입력... (Shift+Enter 줄바꿈)' : '먼저 API 키를 설정해주세요'}
                           value={chatInput}
                           onChange={e => setChatInput(e.target.value)}
                           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() } }}
@@ -646,57 +827,10 @@ export default function App() {
               </div>
             )}
 
-            {/* TASKS */}
-            {activeTab === 'tasks' && (
-              <div className="panel-pane active">
-                <div className="tasks-header">
-                  <span className="tasks-header-label">에이전트 태스크</span>
-                  <span className="tasks-count-badge">4</span>
-                </div>
-                <div className="tasks-body">
-                  {DEMO_TASKS.map(task => (
-                    <div key={task.id}>
-                      <div className={`task-row ${task.status}`} onClick={() => setExpandedTask(expandedTask === task.id ? null : task.id)}>
-                        <div className={`task-dot ${task.status}`} />
-                        <span className="task-name">{task.name}</span>
-                        <span className="task-pct" style={{ color: task.status === 'done' ? 'var(--green)' : task.status === 'waiting' ? 'var(--yellow)' : undefined }}>
-                          {task.status === 'done' ? '완료' : task.status === 'waiting' ? '대기' : task.pct + '%'}
-                        </span>
-                        <button className="task-btn">{task.status === 'running' ? '중지' : task.status === 'done' ? '보기' : '시작'}</button>
-                      </div>
-                      <div className={`task-expand ${expandedTask === task.id ? 'open' : ''}`}>
-                        {task.status === 'running' && (
-                          <div className="task-progress"><div className="task-progress-fill" style={{ width: task.pct + '%' }} /></div>
-                        )}
-                        {task.status === 'done'
-                          ? <div className="task-result">{task.result}</div>
-                          : <div className="task-expand-desc">{task.desc}</div>
-                        }
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* FILES */}
             {activeTab === 'files' && (
               <div className="panel-pane active">
-                <div className="files-header">로컬 폴더와 변환 파일</div>
-                <button className="folder-open-btn" onClick={openLocalFolder}>로컬 폴더 열기...</button>
-                {localFolder && (
-                  <>
-                    <div className="folder-name">{localFolder.name}</div>
-                    <div style={{ maxHeight: 150, overflowY: 'auto', borderBottom: '1px solid var(--border)' }}>
-                      {localFolder.entries.map(entry => (
-                        <div className="folder-entry" key={`${entry.kind}-${entry.name}`}>
-                          <span>{entry.kind === 'directory' ? '▸' : '·'}</span>
-                          <span>{entry.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
+                <div className="files-header">변환된 파일</div>
                 <div className="files-body">
                   {convertedFiles.length === 0 ? (
                     <div style={{ padding: '16px 12px', fontSize: '12.5px', color: 'var(--fg3)', lineHeight: 1.6 }}>
@@ -730,14 +864,14 @@ export default function App() {
             coxmos
           </div>
           <div className="sb-item">
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)' }} />
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: agentAvailable ? 'var(--green)' : 'var(--fg3)' }} />
             {accountConnected ? `${AGENTS[agent].name} 계정 연결됨` : apiKeys[agent] ? `${AGENTS[agent].name} API 연결됨` : `${AGENTS[agent].name} 연결 필요`}
           </div>
           <div className="sb-right">
             <div className="sb-item">{activeNote?.blocks.length ?? 0}개 블록</div>
             <div className="sb-item">Markdown</div>
             <div className="sb-item" onClick={openSettings} style={{ cursor: 'pointer' }}>
-              {accountConnected ? '● 구독 계정 연결됨' : apiKeys[agent] ? '● API 연결됨' : '○ 연결 필요'}
+              {agentAvailable ? '● 연결됨' : '○ 연결 필요'}
             </div>
           </div>
         </div>
@@ -748,7 +882,7 @@ export default function App() {
         <div className="slash-menu" style={{ left: slashMenu.x, top: slashMenu.y }}>
           <div className="slash-header">블록 유형</div>
           {SLASH_ITEMS.map(item => (
-            <div key={item.type} className="slash-item" onClick={() => changeBlockType(slashMenu.blockId, item.type as BlockType)}>
+            <div key={item.type} className="slash-item" onClick={() => changeBlockType(slashMenu.blockId, item.type as BlockType, true)}>
               <span className="slash-icon">{item.icon}</span>
               {item.label}
             </div>
@@ -779,6 +913,8 @@ export default function App() {
           loginOutput={loginOutput}
           onLogin={loginLocalAgent}
           onRefresh={refreshLocalStatuses}
+          fetchingModels={fetchingModels}
+          availableModels={availableModels}
         />
       )}
 
