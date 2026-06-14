@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import { storage, noteToMarkdown, downloadMd } from '@/lib/storage'
-import type { Note, Block, BlockType, AgentId, ChatMessage, ChatSession, ApiKeys, ConvertedFile, LocalAgentStatuses, Theme } from '@/lib/types'
+import type { Note, Block, BlockType, AgentId, ChatMessage, ChatSession, ApiKeys, ConvertedFile, LocalAgentStatuses, Theme, AgentTask } from '@/lib/types'
 import { AGENTS, SLASH_ITEMS } from '@/lib/data'
 import {
   IconExplorer, IconSearch, IconSettings, IconPlus,
@@ -91,7 +91,8 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState<Record<AgentId, string>>({ claude: '', openai: '' })
   const [availableModels, setAvailableModels] = useState<Record<AgentId, string[]>>({ claude: [], openai: [] })
   const [fetchingModels, setFetchingModels] = useState<Record<AgentId, boolean>>({ claude: false, openai: false })
-  const [activeTab, setActiveTab] = useState<'chat' | 'files'>('chat')
+  const [activeTab, setActiveTab] = useState<'chat' | 'tasks' | 'files'>('chat')
+  const [tasks, setTasks] = useState<AgentTask[]>([])
   const [slashMenu, setSlashMenu] = useState({ open: false, x: 0, y: 0, blockId: '' })
   const [showConvert, setShowConvert] = useState(false)
   const [convertState, setConvertState] = useState<'loading' | 'done' | null>(null)
@@ -118,6 +119,7 @@ export default function App() {
     document.documentElement.dataset.theme = savedTheme
     setSelectedModel(storage.getSelectedModel())
     setAvailableModels(storage.getAvailableModels())
+    setTasks(storage.getTasks())
     const savedChats = storage.getChats()
     if (savedChats.length) {
       setChats(savedChats)
@@ -449,6 +451,20 @@ export default function App() {
     updateMessages([...newMsgs, { role: 'assistant', content: '' }])
     setChatInput('')
     setIsStreaming(true)
+
+    // Record task
+    const taskId = uid()
+    const newTask: AgentTask = {
+      id: taskId, agentId: agent, prompt: text, result: '',
+      status: 'running', noteTitle: activeNoteRef.current?.title || '',
+      createdAt: Date.now(), updatedAt: Date.now(),
+    }
+    setTasks(prev => {
+      const next = [newTask, ...prev]
+      storage.saveTasks(next)
+      return next
+    })
+
     try {
       const note = activeNoteRef.current
       const noteCtx = note ? `현재 노트 (${note.title}):\n\n${noteToMarkdown(note)}\n\n---\n\n` : ''
@@ -476,12 +492,29 @@ export default function App() {
           return n
         })
       }
+      // Update task as done
+      setTasks(prev => {
+        const next = prev.map(t => t.id === taskId
+          ? { ...t, status: 'done' as const, result: full.slice(0, 300), updatedAt: Date.now() }
+          : t
+        )
+        storage.saveTasks(next)
+        return next
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : '오류가 발생했습니다.'
       updateMessages(prev => {
         const n = [...prev]
         n[n.length - 1] = { role: 'assistant', content: `오류: ${msg}` }
         return n
+      })
+      setTasks(prev => {
+        const next = prev.map(t => t.id === taskId
+          ? { ...t, status: 'error' as const, result: msg, updatedAt: Date.now() }
+          : t
+        )
+        storage.saveTasks(next)
+        return next
       })
     } finally { setIsStreaming(false) }
   }
@@ -716,9 +749,12 @@ export default function App() {
           {/* Right Panel */}
           <aside className="right-panel">
             <div className="panel-tabs">
-              {(['chat', 'files'] as const).map(t => (
+              {(['chat', 'tasks', 'files'] as const).map(t => (
                 <div key={t} className={`p-tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)}>
-                  {t === 'chat' ? 'CHAT' : 'FILES'}
+                  {t === 'chat' ? 'CHAT' : t === 'tasks' ? 'TASKS' : 'FILES'}
+                  {t === 'tasks' && tasks.filter(tk => tk.status === 'running').length > 0 && (
+                    <span className="tasks-badge">{tasks.filter(tk => tk.status === 'running').length}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -823,6 +859,49 @@ export default function App() {
                       </div>
                     </div>
                   </>
+                )}
+              </div>
+            )}
+
+            {/* TASKS */}
+            {activeTab === 'tasks' && (
+              <div className="panel-pane active">
+                <div className="tasks-header">
+                  <span className="tasks-header-label">에이전트 태스크</span>
+                  {tasks.length > 0 && <span className="tasks-count-badge">{tasks.length}</span>}
+                </div>
+                {tasks.length === 0 ? (
+                  <div style={{ padding: '20px 14px', fontSize: '12.5px', color: 'var(--fg3)', lineHeight: 1.7 }}>
+                    아직 AI에게 시킨 작업이 없어요.<br />
+                    CHAT 탭에서 메시지를 보내면<br />여기에 기록됩니다.
+                  </div>
+                ) : (
+                  <div className="tasks-body">
+                    {tasks.map(task => (
+                      <div key={task.id} className={`task-row ${task.status}`}>
+                        <div className={`task-dot ${task.status}`} />
+                        <div className="task-main">
+                          <div className="task-name">{task.prompt.slice(0, 60)}{task.prompt.length > 60 ? '...' : ''}</div>
+                          <div className="task-meta">
+                            {AGENTS[task.agentId].name}
+                            {task.noteTitle ? ` · ${task.noteTitle}` : ''}
+                            {' · '}{new Date(task.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                          {task.status === 'done' && task.result && (
+                            <div className="task-result">{task.result}</div>
+                          )}
+                          {task.status === 'error' && (
+                            <div className="task-result error">{task.result}</div>
+                          )}
+                        </div>
+                        <span className="task-pct" style={{
+                          color: task.status === 'done' ? 'var(--green)' : task.status === 'error' ? 'var(--red)' : 'var(--yellow)'
+                        }}>
+                          {task.status === 'done' ? '완료' : task.status === 'error' ? '오류' : '실행중'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}

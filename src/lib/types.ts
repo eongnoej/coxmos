@@ -63,3 +63,16 @@ export interface ConvertedFile {
   markdown: string
   createdAt: number
 }
+
+export type TaskStatus = 'running' | 'done' | 'error'
+
+export interface AgentTask {
+  id: string
+  agentId: AgentId
+  prompt: string
+  result: string
+  status: TaskStatus
+  noteTitle: string
+  createdAt: number
+  updatedAt: number
+}

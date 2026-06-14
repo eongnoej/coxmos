@@ -1,4 +1,4 @@
-import type { Note, ApiKeys, AgentId, ConvertedFile, ChatSession, Theme } from './types'
+import type { Note, ApiKeys, AgentId, ConvertedFile, ChatSession, Theme, AgentTask } from './types'
 
 const KEYS = {
   notes:           'coxmos-notes',
@@ -9,6 +9,7 @@ const KEYS = {
   theme:           'coxmos-theme',
   selectedModel:   'coxmos-selected-model',
   availableModels: 'coxmos-available-models',
+  tasks:           'coxmos-tasks',
 }
 
 function safe<T>(fn: () => T, fallback: T): T {
@@ -60,6 +61,12 @@ export const storage = {
 
   getConvertedFiles: (): ConvertedFile[] =>
     safe(() => JSON.parse(localStorage.getItem(KEYS.converted) || '[]'), []),
+
+  getTasks: (): AgentTask[] =>
+    safe(() => JSON.parse(localStorage.getItem(KEYS.tasks) || '[]'), []),
+
+  saveTasks: (tasks: AgentTask[]) =>
+    localStorage.setItem(KEYS.tasks, JSON.stringify(tasks.slice(0, 200))),
 
   saveConvertedFile: (file: ConvertedFile) => {
     const files = storage.getConvertedFiles()
